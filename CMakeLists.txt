@@ -19,6 +19,8 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE "Release")
 endif()
 
+option(DLIO_INSTALL "Install targets, headers and the CMake package" ON)
+
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
@@ -82,35 +84,40 @@ if(DLIO_BUILD_EXAMPLES)
   add_subdirectory(examples)
 endif()
 
-# Smoke test
-enable_testing()
-add_executable(dlio_smoke_test tests/smoke_test.cpp)
-target_link_libraries(dlio_smoke_test dlio)
-add_test(NAME smoke COMMAND dlio_smoke_test)
+# Smoke test (skip when embedded as a subdirectory)
+option(DLIO_BUILD_TESTS "Build the smoke test" ON)
+if(DLIO_BUILD_TESTS)
+  enable_testing()
+  add_executable(dlio_smoke_test tests/smoke_test.cpp)
+  target_link_libraries(dlio_smoke_test dlio)
+  add_test(NAME smoke COMMAND dlio_smoke_test)
+endif()
 
-# Install
-install(TARGETS dlio nano_gicp nanoflann
-  EXPORT dlioTargets
-  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-install(DIRECTORY config DESTINATION ${CMAKE_INSTALL_DATADIR}/dlio)
+# Install (skip when embedded via add_subdirectory in another build)
+if(DLIO_INSTALL)
+  install(TARGETS dlio nano_gicp nanoflann
+    EXPORT dlioTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+  install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+  install(DIRECTORY config DESTINATION ${CMAKE_INSTALL_DATADIR}/dlio)
 
-install(EXPORT dlioTargets
-  FILE dlioTargets.cmake
-  NAMESPACE dlio::
-  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dlio)
+  install(EXPORT dlioTargets
+    FILE dlioTargets.cmake
+    NAMESPACE dlio::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dlio)
 
-configure_package_config_file(
-  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/dlioConfig.cmake.in
-  ${CMAKE_CURRENT_BINARY_DIR}/dlioConfig.cmake
-  INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dlio)
-write_basic_package_version_file(
-  ${CMAKE_CURRENT_BINARY_DIR}/dlioConfigVersion.cmake
-  VERSION ${PROJECT_VERSION}
-  COMPATIBILITY SameMajorVersion)
-install(FILES
-  ${CMAKE_CURRENT_BINARY_DIR}/dlioConfig.cmake
-  ${CMAKE_CURRENT_BINARY_DIR}/dlioConfigVersion.cmake
-  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dlio)
+  configure_package_config_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/dlioConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/dlioConfig.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dlio)
+  write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/dlioConfigVersion.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion)
+  install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/dlioConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/dlioConfigVersion.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dlio)
+endif()
