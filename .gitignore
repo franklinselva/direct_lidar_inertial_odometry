@@ -1,1 +1,5 @@
 build/
+*.bag
+.venv-tools/
+data/*
+!data/.gitkeep

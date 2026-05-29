@@ -75,6 +75,12 @@ struct Keyframe {
   double stamp = 0.0;
 };
 
+struct ImuIntrinsics {
+  Eigen::Vector3f accelBias = Eigen::Vector3f::Zero();
+  Eigen::Vector3f gyroBias = Eigen::Vector3f::Zero();
+  Eigen::Matrix3f accelScaleMisalign = Eigen::Matrix3f::Identity();
+};
+
 struct Extrinsics {
   struct SE3 {
     Eigen::Vector3f t = Eigen::Vector3f::Zero();
@@ -84,6 +90,16 @@ struct Extrinsics {
   SE3 baselink2lidar;
   Eigen::Matrix4f baselink2imu_T = Eigen::Matrix4f::Identity();
   Eigen::Matrix4f baselink2lidar_T = Eigen::Matrix4f::Identity();
+
+  // Rebuild the 4x4 transforms from the t/R of each SE3.
+  void recompute() {
+    baselink2imu_T = Eigen::Matrix4f::Identity();
+    baselink2imu_T.block(0, 3, 3, 1) = baselink2imu.t;
+    baselink2imu_T.block(0, 0, 3, 3) = baselink2imu.R;
+    baselink2lidar_T = Eigen::Matrix4f::Identity();
+    baselink2lidar_T.block(0, 3, 3, 1) = baselink2lidar.t;
+    baselink2lidar_T.block(0, 0, 3, 3) = baselink2lidar.R;
+  }
 };
 
 } // namespace dlio

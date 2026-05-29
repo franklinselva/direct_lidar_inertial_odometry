@@ -30,6 +30,7 @@
 #include <iostream>
 #include <numeric>
 #include <queue>
+#include <stdexcept>
 
 #ifdef HAS_CPUID
 #include <cpuid.h>
@@ -101,6 +102,7 @@ LIO::LIO(const Config& cfg) : cfg_(cfg) {
 
   this->num_threads_ = omp_get_max_threads();
 
+  this->data_started_ = false;
   this->dlio_initialized = false;
   this->first_valid_scan = false;
   this->first_imu_received = false;
@@ -156,6 +158,8 @@ LIO::LIO(const Config& cfg) : cfg_(cfg) {
   this->first_scan_stamp = 0.;
   this->elapsed_time = 0.;
   this->length_traversed = 0.;
+  this->length_prev_p_ = Eigen::Vector3f(0., 0., 0.);
+  this->length_started_ = false;
   this->new_submap_is_ready = true;
   this->main_loop_running = false;
 
@@ -258,6 +262,58 @@ void LIO::start() {
   std::cout << "|               Direct LiDAR-Inertial Odometry v" << this->version_  << "               |"
             << std::endl;
   std::cout << "+-------------------------------------------------------------------+" << std::endl;
+}
+
+void LIO::ensureNotStarted(const char* what) const {
+  if (this->data_started_) {
+    throw std::logic_error(std::string("dlio: ") + what +
+                           " must be called before feeding any IMU/scan data");
+  }
+}
+
+void LIO::setExtrinsics(const Extrinsics& extrinsics) {
+  this->ensureNotStarted("setExtrinsics");
+  this->extrinsics = extrinsics;
+  this->extrinsics.recompute();
+}
+
+void LIO::setImuExtrinsics(const Eigen::Vector3f& t, const Eigen::Matrix3f& R) {
+  this->ensureNotStarted("setImuExtrinsics");
+  this->extrinsics.baselink2imu.t = t;
+  this->extrinsics.baselink2imu.R = R;
+  this->extrinsics.recompute();
+}
+
+void LIO::setLidarExtrinsics(const Eigen::Vector3f& t, const Eigen::Matrix3f& R) {
+  this->ensureNotStarted("setLidarExtrinsics");
+  this->extrinsics.baselink2lidar.t = t;
+  this->extrinsics.baselink2lidar.R = R;
+  this->extrinsics.recompute();
+}
+
+void LIO::setImuIntrinsics(const ImuIntrinsics& intrinsics) {
+  this->ensureNotStarted("setImuIntrinsics");
+  this->state.b.accel = intrinsics.accelBias;
+  this->state.b.gyro = intrinsics.gyroBias;
+  this->imu_accel_sm_ = intrinsics.accelScaleMisalign;
+}
+
+void LIO::setImuCalibration(bool enable) {
+  this->ensureNotStarted("setImuCalibration");
+  this->imu_calibrate_ = enable;
+  this->imu_calibrated = !enable;
+}
+
+Extrinsics LIO::getExtrinsics() const {
+  return this->extrinsics;
+}
+
+ImuIntrinsics LIO::getImuIntrinsics() const {
+  ImuIntrinsics out;
+  out.accelBias = this->state.b.accel;
+  out.gyroBias = this->state.b.gyro;
+  out.accelScaleMisalign = this->imu_accel_sm_;
+  return out;
 }
 
 void LIO::getScan(Cloud::ConstPtr scan, double stamp) {
@@ -503,6 +559,8 @@ void LIO::initializeDLIO() {
 
 bool LIO::addScan(Cloud::ConstPtr scan, double stamp) {
 
+  this->data_started_ = true;
+
   std::unique_lock<decltype(this->main_loop_running_mutex)> lock(main_loop_running_mutex);
   this->main_loop_running = true;
   lock.unlock();
@@ -577,6 +635,19 @@ bool LIO::addScan(Cloud::ConstPtr scan, double stamp) {
   this->trajectory.push_back( std::make_pair(this->state.p, this->state.q) );
   this->trajectory_stamps.push_back( this->scan_stamp );
 
+  // Maintain traversed length here (not only in debug()), so wait_until_move and
+  // any consumer works regardless of verbosity.
+  if (!this->length_started_) {
+    this->length_prev_p_ = this->state.p;
+    this->length_started_ = true;
+  } else {
+    float l = (this->state.p - this->length_prev_p_).norm();
+    if (l >= 0.1f) {
+      this->length_traversed += l;
+      this->length_prev_p_ = this->state.p;
+    }
+  }
+
   // Update time stamps
   this->lidar_rates.push_back( 1. / (this->scan_stamp - this->prev_scan_stamp) );
   this->prev_scan_stamp = this->scan_stamp;
@@ -612,6 +683,7 @@ bool LIO::addScan(Cloud::ConstPtr scan, double stamp) {
 
 void LIO::addImu(const ImuSample& imu_raw) {
 
+  this->data_started_ = true;
   this->first_imu_received = true;
 
   ImuSample imu = this->transformImu( imu_raw );
@@ -1581,7 +1653,6 @@ void LIO::debug() {
       p_prev = p_curr;
     }
   }
-  this->length_traversed = length_traversed;
 
   // Average computation time
   double avg_comp_time =

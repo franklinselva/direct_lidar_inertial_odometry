@@ -46,6 +46,18 @@ public:
   void addImu(const ImuSample& imu);
   bool addScan(Cloud::ConstPtr scan, double stamp);
 
+  // Programmatic setup (alternative to YAML config).
+  // Must be called before any data is fed; throws std::logic_error otherwise.
+  void setExtrinsics(const Extrinsics& extrinsics);
+  void setImuExtrinsics(const Eigen::Vector3f& t, const Eigen::Matrix3f& R);
+  void setLidarExtrinsics(const Eigen::Vector3f& t, const Eigen::Matrix3f& R);
+  void setImuIntrinsics(const ImuIntrinsics& intrinsics);
+  void setImuCalibration(bool enable);
+
+  Extrinsics getExtrinsics() const;
+  ImuIntrinsics getImuIntrinsics() const;
+  bool imuCalibrationEnabled() const { return this->imu_calibrate_; }
+
   // Accessors
   State getState() const;
   Pose getLidarPose() const;
@@ -111,7 +123,10 @@ private:
 
   void debug();
 
+  void ensureNotStarted(const char* what) const;
+
   Config cfg_;
+  std::atomic<bool> data_started_;
 
   // Flags
   std::atomic<bool> dlio_initialized;
@@ -131,6 +146,8 @@ private:
   std::vector<std::pair<Eigen::Vector3f, Eigen::Quaternionf>> trajectory;
   std::vector<double> trajectory_stamps;
   double length_traversed;
+  Eigen::Vector3f length_prev_p_;
+  bool length_started_;
 
   // Keyframes
   std::vector<std::pair<std::pair<Eigen::Vector3f, Eigen::Quaternionf>,

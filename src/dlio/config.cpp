@@ -142,14 +142,7 @@ Config load_config(const std::string& path) {
   const YAML::Node ext = n["extrinsics"];
   c.extrinsics.baselink2imu = se3(ext["baselink2imu"]);
   c.extrinsics.baselink2lidar = se3(ext["baselink2lidar"]);
-
-  c.extrinsics.baselink2imu_T = Eigen::Matrix4f::Identity();
-  c.extrinsics.baselink2imu_T.block(0, 3, 3, 1) = c.extrinsics.baselink2imu.t;
-  c.extrinsics.baselink2imu_T.block(0, 0, 3, 3) = c.extrinsics.baselink2imu.R;
-
-  c.extrinsics.baselink2lidar_T = Eigen::Matrix4f::Identity();
-  c.extrinsics.baselink2lidar_T.block(0, 3, 3, 1) = c.extrinsics.baselink2lidar.t;
-  c.extrinsics.baselink2lidar_T.block(0, 0, 3, 3) = c.extrinsics.baselink2lidar.R;
+  c.extrinsics.recompute();
 
   return c;
 }

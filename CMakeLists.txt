@@ -76,9 +76,11 @@ endif()
 
 add_library(dlio::dlio ALIAS dlio)
 
-# Example
-add_executable(dlio_live_mapping examples/live_mapping.cpp)
-target_link_libraries(dlio_live_mapping dlio)
+# Examples (own subdir so viz deps stay off the core lib)
+option(DLIO_BUILD_EXAMPLES "Build example executables" ON)
+if(DLIO_BUILD_EXAMPLES)
+  add_subdirectory(examples)
+endif()
 
 # Smoke test
 enable_testing()
@@ -92,7 +94,6 @@ install(TARGETS dlio nano_gicp nanoflann
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(TARGETS dlio_live_mapping RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(DIRECTORY config DESTINATION ${CMAKE_INSTALL_DATADIR}/dlio)
 

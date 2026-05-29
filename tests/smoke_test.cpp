@@ -53,6 +53,19 @@ int main() {
   LIO lio(cfg);
   Map map(0.25);
 
+  // Programmatic setup (alternative to YAML), valid before any data is fed.
+  lio.setImuExtrinsics(Eigen::Vector3f(0.01f, -0.02f, 0.03f), Eigen::Matrix3f::Identity());
+  lio.setLidarExtrinsics(Eigen::Vector3f::Zero(), Eigen::Matrix3f::Identity());
+  ImuIntrinsics intr;
+  intr.accelScaleMisalign = Eigen::Matrix3f::Identity();
+  lio.setImuIntrinsics(intr);
+  lio.setImuCalibration(true);
+
+  if (lio.getExtrinsics().baselink2imu.t.x() != 0.01f) {
+    std::cerr << "FAIL: extrinsics setter/getter mismatch" << std::endl;
+    return 1;
+  }
+
   int kf_count = 0;
   lio.onKeyframe = [&](const Keyframe& kf) { map.addKeyframe(kf.cloud); ++kf_count; };
 
@@ -101,6 +114,15 @@ int main() {
 
   State final = lio.getState();
   std::cout << "final position: " << final.p.transpose() << std::endl;
+
+  // Setters must reject post-data calls.
+  bool threw = false;
+  try { lio.setImuCalibration(false); }
+  catch (const std::logic_error&) { threw = true; }
+  if (!threw) {
+    std::cerr << "FAIL: setter did not reject post-data call" << std::endl;
+    return 1;
+  }
 
   std::cout << "PASS" << std::endl;
   return 0;
