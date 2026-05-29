@@ -60,7 +60,8 @@ add_library(dlio SHARED
   src/dlio/config.cpp
   src/dlio/lio.cpp
   src/dlio/map.cpp
-  src/dlio/io.cpp)
+  src/dlio/io.cpp
+  src/dlio/dense_map.cpp)
 target_include_directories(dlio PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
@@ -91,6 +92,9 @@ if(DLIO_BUILD_TESTS)
   add_executable(dlio_smoke_test tests/smoke_test.cpp)
   target_link_libraries(dlio_smoke_test dlio)
   add_test(NAME smoke COMMAND dlio_smoke_test)
+  add_executable(dlio_dense_map_test tests/dense_map_test.cpp)
+  target_link_libraries(dlio_dense_map_test dlio)
+  add_test(NAME dense_map COMMAND dlio_dense_map_test)
 endif()
 
 # Install (skip when embedded via add_subdirectory in another build)
