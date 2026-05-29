@@ -11,75 +11,80 @@ DLIO is a new lightweight LiDAR-inertial odometry algorithm with a novel coarse-
 
 ## Instructions
 
+> **This fork is a pure C++ library.** ROS has been removed entirely. The odometry
+> and mapping engines are driven through a push API and configured with a single
+> YAML file via `yaml-cpp`. A real sensor and an offline replay feed the exact same
+> calls (`addImu` / `addScan`).
+
 ### Sensor Setup & Compatibility
-DLIO has been extensively tested using a variety of sensor configurations and currently supports Ouster, Velodyne, Hesai, and Livox LiDARs. The point cloud should be of input type `sensor_msgs::PointCloud2` and the 6-axis IMU input type of `sensor_msgs::Imu`. 
+DLIO supports Ouster, Velodyne, Hesai, and Livox LiDARs plus a 6-axis IMU. The caller
+fills a `pcl::PointCloud<dlio::Point>` (with per-point time in the `t`/`time`/`timestamp`
+field for the chosen sensor) and an `dlio::ImuSample`. Set `sensor` in the config to one
+of `ouster | velodyne | hesai | livox`; `unknown` disables motion deskew.
 
-For Livox sensors specifically, you can use the `master` branch directly if it is of type `sensor_msgs::PointCloud2` (`xfer_format: 0`), or the `feature/livox-support` branch and the latest [`livox_ros_driver2`](https://github.com/Livox-SDK/livox_ros_driver2) package if it is of type `livox_ros_driver2::CustomMsg` (`xfer_format: 1`) (see [here](https://github.com/vectr-ucla/direct_lidar_inertial_odometry/issues/5) for more information).
-
-For best performance, extrinsic calibration between the LiDAR/IMU sensors and the robot's center-of-gravity should be inputted into `cfg/dlio.yaml`. If the exact values of these are unavailable, a rough LiDAR-to-IMU extrinsics can also be used (note however that performance will be degraded).
-
-IMU intrinsics are also necessary for best performance, and there are several open-source calibration tools to get these values. These values should also go into `cfg/dlio.yaml`. In practice however, if you are just testing this work, using the default ideal values and performing the initial calibration procedure should be fine.
-
-Also note that the LiDAR and IMU sensors _need_ to be properly time-synchronized, otherwise DLIO will not work. We recommend using a LiDAR with an integrated IMU (such as an Ouster) for simplicity of extrinsics and synchronization.
+For best performance, extrinsic calibration between the LiDAR/IMU sensors and the robot's
+center-of-gravity should be entered into `config/dlio.yaml`, along with IMU intrinsics. The
+default ideal values plus the startup calibration procedure are sufficient for testing. The
+LiDAR and IMU _must_ be time-synchronized — an integrated-IMU LiDAR (e.g. Ouster) is simplest.
 
 ### Dependencies
-The following has been verified to be compatible, although other configurations may work too:
 
-- Ubuntu 20.04
-- ROS Noetic (`roscpp`, `std_msgs`, `sensor_msgs`, `geometry_msgs`, `nav_msgs`, `pcl_ros`)
-- C++ 14
 - CMake >= `3.12.4`
+- C++17 compiler
 - OpenMP >= `4.5`
-- Point Cloud Library >= `1.10.0`
+- Point Cloud Library >= `1.10`
 - Eigen >= `3.3.7`
+- yaml-cpp
 
 ```sh
-sudo apt install libomp-dev libpcl-dev libeigen3-dev
+sudo apt install libomp-dev libpcl-dev libeigen3-dev libyaml-cpp-dev
 ```
-
-DLIO supports ROS1 by default, and ROS2 using the `feature/ros2` branch.
 
 ### Compiling
-Compile using the [`catkin_tools`](https://catkin-tools.readthedocs.io/en/latest/) package via:
 
 ```sh
-mkdir ws && cd ws && mkdir src && catkin init && cd src
-git clone https://github.com/vectr-ucla/direct_lidar_inertial_odometry.git
-catkin build
+git clone <this-repo> dlio && cd dlio
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+ctest --test-dir build       # runs the smoke test
 ```
 
-### Execution
-After compiling, source the workspace and execute via:
+This produces `libdlio.so`, the `dlio_live_mapping` example, and an installable
+`find_package(dlio)` CMake package.
 
-```sh
-roslaunch direct_lidar_inertial_odometry dlio.launch \
-  rviz:={true, false} \
-  pointcloud_topic:=/robot/lidar \
-  imu_topic:=/robot/imu
+### Library API
+
+```cpp
+#include <dlio/config.hpp>
+#include <dlio/lio.hpp>
+#include <dlio/map.hpp>
+#include <dlio/io.hpp>
+
+dlio::Config cfg = dlio::load_config("config/dlio.yaml");
+dlio::LIO lio(cfg);
+dlio::Map map(cfg.map.sparseLeafSize);
+
+lio.onKeyframe = [&](const dlio::Keyframe& kf){ map.addKeyframe(kf.cloud); };
+lio.onPose     = [&](const dlio::State& s, double stamp){ /* stream pose */ };
+
+// feed sensor data (real-time or replay)
+lio.addImu(imu_sample);              // dlio::ImuSample{stamp, ang_vel, lin_accel}
+lio.addScan(cloud, stamp);           // pcl::PointCloud<dlio::Point>::ConstPtr
+
+// outputs
+map.save("dlio_map.pcd", cfg.map.sparseLeafSize);
+dlio::io::write_tum_trajectory("trajectory.txt", lio.getTrajectory(), lio.getTrajectoryStamps());
+dlio::io::write_keyframes("keyframes/", lio.getKeyframes());
 ```
 
-for Ouster, Velodyne, Hesai, or Livox (`xfer_format: 0`) sensors, or 
+### Example: offline replay
+
+The bundled `dlio_live_mapping` example replays a directory of timestamped PCD scans
+(`<stamp>.pcd`) plus an IMU CSV (`stamp,wx,wy,wz,ax,ay,az`) through the push API and writes
+the map, TUM trajectory, and keyframes:
 
 ```sh
-roslaunch direct_lidar_inertial_odometry dlio.launch \
-  rviz:={true, false} \
-  livox_topic:=/livox/lidar \
-  imu_topic:=/robot/imu
-```
-
-for Livox sensors (`xfer_format: 1`).
-
-Be sure to change the topic names to your corresponding topics. Alternatively, edit the launch file directly if desired. If successful, you should see the following output in your terminal:
-<br>
-<p align='center'>
-    <img src="./doc/img/terminal.png" alt="drawing" width="480"/>
-</p>
-
-### Services
-To save DLIO's generated map into `.pcd` format, call the following service:
-
-```sh
-rosservice call /robot/dlio_map/save_pcd LEAF_SIZE SAVE_PATH
+./build/dlio_live_mapping config/dlio.yaml <pcd_dir> <imu.csv> <out_dir>
 ```
 
 ### Test Data

@@ -10,35 +10,64 @@
  *                                                         *
  ***********************************************************/
 
-#include "dlio/dlio.h"
+#pragma once
 
-class dlio::OdomNode {
+#include "dlio/config.hpp"
+#include "dlio/types.hpp"
 
+#include <nano_gicp/nano_gicp.h>
+
+#include <pcl/filters/crop_box.h>
+#include <pcl/filters/voxel_grid.h>
+#include <pcl/surface/concave_hull.h>
+#include <pcl/surface/convex_hull.h>
+
+#include <boost/circular_buffer.hpp>
+
+#include <atomic>
+#include <condition_variable>
+#include <ctime>
+#include <functional>
+#include <future>
+#include <mutex>
+#include <thread>
+#include <vector>
+
+namespace dlio {
+
+class LIO {
 public:
-
-  OdomNode(ros::NodeHandle node_handle);
-  ~OdomNode();
+  explicit LIO(const Config& cfg);
+  ~LIO();
 
   void start();
 
+  // Push API (replaces ROS callbacks)
+  void addImu(const ImuSample& imu);
+  bool addScan(Cloud::ConstPtr scan, double stamp);
+
+  // Accessors
+  State getState() const;
+  Pose getLidarPose() const;
+  std::vector<Pose> getTrajectory() const;
+  std::vector<double> getTrajectoryStamps() const;
+  std::vector<Keyframe> getKeyframes() const;
+  bool initialized() const { return this->dlio_initialized; }
+
+  // Live callbacks (replace ROS publishers); all optional
+  std::function<void(const State&, double stamp)> onPose;
+  std::function<void(Cloud::ConstPtr deskewed_world, const State&, double stamp)> onDeskewedCloud;
+  std::function<void(const Keyframe&)> onKeyframe;
+
 private:
+  struct ImuMeas {
+    double stamp = 0.0;
+    double dt = 0.0;
+    Eigen::Vector3f ang_vel = Eigen::Vector3f::Zero();
+    Eigen::Vector3f lin_accel = Eigen::Vector3f::Zero();
+  };
 
-  struct State;
-  struct ImuMeas;
-
-  void getParams();
-
-  void callbackPointCloud(const sensor_msgs::PointCloud2ConstPtr& pc);
-  void callbackImu(const sensor_msgs::Imu::ConstPtr& imu);
-
-  void publishPose(const ros::TimerEvent& e);
-
-  void publishToROS(pcl::PointCloud<PointType>::ConstPtr published_cloud, Eigen::Matrix4f T_cloud);
-  void publishCloud(pcl::PointCloud<PointType>::ConstPtr published_cloud, Eigen::Matrix4f T_cloud);
-  void publishKeyframe(std::pair<std::pair<Eigen::Vector3f, Eigen::Quaternionf>,
-                       pcl::PointCloud<PointType>::ConstPtr> kf, ros::Time timestamp);
-
-  void getScanFromROS(const sensor_msgs::PointCloud2ConstPtr& pc);
+  void getScan(Cloud::ConstPtr scan, double stamp);
   void preprocessPoints();
   void deskewPointcloud();
   void initializeInputTarget();
@@ -64,13 +93,12 @@ private:
   void updateState();
 
   void setAdaptiveParams();
-  void setKeyframeCloud();
 
   void computeMetrics();
   void computeSpaciousness();
   void computeDensity();
 
-  sensor_msgs::Imu::Ptr transformImu(const sensor_msgs::Imu::ConstPtr& imu);
+  ImuSample transformImu(const ImuSample& imu);
 
   void updateKeyframes();
   void computeConvexHull();
@@ -79,29 +107,11 @@ private:
   void buildSubmap(State vehicle_state);
   void buildKeyframesAndSubmap(State vehicle_state);
   void pauseSubmapBuildIfNeeded();
+  void emitKeyframe(int idx);
 
   void debug();
 
-  ros::NodeHandle nh;
-  ros::Timer publish_timer;
-
-  // Subscribers
-  ros::Subscriber lidar_sub;
-  ros::Subscriber imu_sub;
-
-  // Publishers
-  ros::Publisher odom_pub;
-  ros::Publisher pose_pub;
-  ros::Publisher path_pub;
-  ros::Publisher kf_pose_pub;
-  ros::Publisher kf_cloud_pub;
-  ros::Publisher deskewed_pub;
-
-  // ROS Msgs
-  nav_msgs::Odometry odom_ros;
-  geometry_msgs::PoseStamped pose_ros;
-  nav_msgs::Path path_ros;
-  geometry_msgs::PoseArray kf_pose_ros;
+  Config cfg_;
 
   // Flags
   std::atomic<bool> dlio_initialized;
@@ -114,43 +124,36 @@ private:
   std::atomic<int> deskew_size;
 
   // Threads
-  std::thread publish_thread;
-  std::thread publish_keyframe_thread;
   std::thread metrics_thread;
   std::thread debug_thread;
 
   // Trajectory
   std::vector<std::pair<Eigen::Vector3f, Eigen::Quaternionf>> trajectory;
+  std::vector<double> trajectory_stamps;
   double length_traversed;
 
   // Keyframes
   std::vector<std::pair<std::pair<Eigen::Vector3f, Eigen::Quaternionf>,
-                        pcl::PointCloud<PointType>::ConstPtr>> keyframes;
-  std::vector<ros::Time> keyframe_timestamps;
+                        Cloud::ConstPtr>> keyframes;
+  std::vector<double> keyframe_timestamps;
   std::vector<std::shared_ptr<const nano_gicp::CovarianceList>> keyframe_normals;
   std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>> keyframe_transformations;
-  std::mutex keyframes_mutex;
+  mutable std::mutex keyframes_mutex;
 
   // Sensor Type
-  dlio::SensorType sensor;
-
-  // Frames
-  std::string odom_frame;
-  std::string baselink_frame;
-  std::string lidar_frame;
-  std::string imu_frame;
+  SensorType sensor;
 
   // Preprocessing
   pcl::CropBox<PointType> crop;
   pcl::VoxelGrid<PointType> voxel;
 
   // Point Clouds
-  pcl::PointCloud<PointType>::ConstPtr original_scan;
-  pcl::PointCloud<PointType>::ConstPtr deskewed_scan;
-  pcl::PointCloud<PointType>::ConstPtr current_scan;
+  Cloud::ConstPtr original_scan;
+  Cloud::ConstPtr deskewed_scan;
+  Cloud::ConstPtr current_scan;
 
   // Keyframes
-  pcl::PointCloud<PointType>::ConstPtr keyframe_cloud;
+  Cloud::ConstPtr keyframe_cloud;
   int num_processed_keyframes;
 
   pcl::ConvexHull<PointType> convex_hull;
@@ -159,7 +162,7 @@ private:
   std::vector<int> keyframe_concave;
 
   // Submap
-  pcl::PointCloud<PointType>::ConstPtr submap_cloud;
+  Cloud::ConstPtr submap_cloud;
   std::shared_ptr<const nano_gicp::CovarianceList> submap_normals;
   std::shared_ptr<const nanoflann::KdTreeFLANN<PointType>> submap_kdtree;
 
@@ -173,7 +176,7 @@ private:
   std::mutex main_loop_running_mutex;
 
   // Timestamps
-  ros::Time scan_header_stamp;
+  double scan_header_stamp;
   double scan_stamp;
   double prev_scan_stamp;
   double scan_dt;
@@ -193,30 +196,15 @@ private:
   Eigen::Quaternionf q_final;
 
   Eigen::Vector3f origin;
-
-  struct Extrinsics {
-    struct SE3 {
-      Eigen::Vector3f t;
-      Eigen::Matrix3f R;
-    };
-    SE3 baselink2imu;
-    SE3 baselink2lidar;
-    Eigen::Matrix4f baselink2imu_T;
-    Eigen::Matrix4f baselink2lidar_T;
-  }; Extrinsics extrinsics;
+  Extrinsics extrinsics;
 
   // IMU
-  ros::Time imu_stamp;
+  double imu_stamp;
   double first_imu_stamp;
   double prev_imu_stamp;
   double imu_dp, imu_dq_deg;
 
-  struct ImuMeas {
-    double stamp;
-    double dt; // defined as the difference between the current and the previous measurement
-    Eigen::Vector3f ang_vel;
-    Eigen::Vector3f lin_accel;
-  }; ImuMeas imu_meas;
+  ImuMeas imu_meas;
 
   boost::circular_buffer<ImuMeas> imu_buffer;
   std::mutex mtx_imu;
@@ -224,7 +212,7 @@ private:
 
   static bool comparatorImu(ImuMeas m1, ImuMeas m2) {
     return (m1.stamp < m2.stamp);
-  };
+  }
 
   // Geometric Observer
   struct Geo {
@@ -235,35 +223,10 @@ private:
     Eigen::Vector3f prev_p;
     Eigen::Quaternionf prev_q;
     Eigen::Vector3f prev_vel;
-  }; Geo geo;
+  }; mutable Geo geo;
 
-  // State Vector
-  struct ImuBias {
-    Eigen::Vector3f gyro;
-    Eigen::Vector3f accel;
-  };
+  State state;
 
-  struct Frames {
-    Eigen::Vector3f b;
-    Eigen::Vector3f w;
-  };
-
-  struct Velocity {
-    Frames lin;
-    Frames ang;
-  };
-
-  struct State {
-    Eigen::Vector3f p; // position in world frame
-    Eigen::Quaternionf q; // orientation in world frame
-    Velocity v;
-    ImuBias b; // imu biases in body frame
-  }; State state;
-
-  struct Pose {
-    Eigen::Vector3f p; // position in world frame
-    Eigen::Quaternionf q; // orientation in world frame
-  };
   Pose lidarPose;
   Pose imuPose;
 
@@ -278,22 +241,15 @@ private:
   clock_t lastCPU, lastSysCPU, lastUserCPU;
   int numProcessors;
 
-  // Parameters
+  // Parameters (populated from cfg_ in constructor)
   std::string version_;
   int num_threads_;
   bool verbose;
 
   bool deskew_;
-
   double gravity_;
-
   bool time_offset_;
-
   bool adaptive_params_;
-
-  double obs_submap_thresh_;
-  double obs_keyframe_thresh_;
-  double obs_keyframe_lag_;
 
   double keyframe_thresh_dist_;
   double keyframe_thresh_rot_;
@@ -301,7 +257,6 @@ private:
   int submap_knn_;
   int submap_kcv_;
   int submap_kcc_;
-  double submap_concave_alpha_;
 
   bool densemap_filtered_;
   bool wait_until_move_;
@@ -334,5 +289,6 @@ private:
   double geo_Kgb_;
   double geo_abias_max_;
   double geo_gbias_max_;
-
 };
+
+} // namespace dlio

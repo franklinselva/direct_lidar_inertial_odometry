@@ -12,11 +12,41 @@
 
 dlio:
 
-  frames:
-    odom: odom
-    baselink: base_link
-    lidar: lidar
-    imu: imu
+  version: 1.1.1
+
+  verbose: true
+  adaptive: true
+
+  # ouster | velodyne | hesai | livox | unknown
+  # unknown disables motion deskew (no per-point timestamps)
+  sensor: unknown
+
+  pointcloud:
+    deskew: true
+    voxelize: true
+
+  imu:
+    calibration: true
+    intrinsics:
+      accel:
+        bias: [ 0.0, 0.0, 0.0 ]
+        sm:   [ 1.,  0.,  0.,
+                0.,  1.,  0.,
+                0.,  0.,  1. ]
+      gyro:
+        bias: [ 0.0, 0.0, 0.0 ]
+
+  extrinsics:
+    baselink2imu:
+      t: [ 0.006253, -0.011775, 0.007645 ]
+      R: [ 1.,  0.,  0.,
+           0.,  1.,  0.,
+           0.,  0.,  1. ]
+    baselink2lidar:
+      t: [ 0.,  0.,  0. ]
+      R: [ 1.,  0.,  0.,
+           0.,  1.,  0.,
+           0.,  0.,  1. ]
 
   map:
     waitUntilMove: true

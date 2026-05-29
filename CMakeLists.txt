@@ -11,109 +11,105 @@
 ###########################################################
 
 cmake_minimum_required(VERSION 3.12.4)
-project(direct_lidar_inertial_odometry)
+project(dlio VERSION 2.0.0 LANGUAGES C CXX)
 
-add_compile_options(-std=c++17)
-set(CMAKE_BUILD_TYPE "Release")
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE "Release")
+endif()
 
-find_package( PCL REQUIRED )
-include_directories(${PCL_INCLUDE_DIRS})
-add_definitions(${PCL_DEFINITIONS})
-link_directories(${PCL_LIBRARY_DIRS})
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
 
-find_package( Eigen3 REQUIRED )
-include_directories(${EIGEN3_INCLUDE_DIR})
-
-include(FindOpenMP)
-if(OPENMP_FOUND)
-  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
-else(OPENMP_FOUND)
-  message("ERROR: OpenMP could not be found.")
-endif(OPENMP_FOUND)
-
-set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
-set(THREADS_PREFER_PTHREAD_FLAG TRUE)
+find_package(MPI COMPONENTS C)  # PCL's VTK dependency references MPI::MPI_C
+find_package(PCL REQUIRED COMPONENTS common io filters kdtree search registration surface octree)
+find_package(Eigen3 REQUIRED)
+find_package(yaml-cpp REQUIRED)
+find_package(OpenMP REQUIRED)
 find_package(Threads REQUIRED)
-
-find_package(catkin REQUIRED COMPONENTS
-  roscpp
-  std_msgs
-  sensor_msgs
-  geometry_msgs
-  nav_msgs
-  pcl_ros
-  message_generation
-)
-
-add_service_files(
-  DIRECTORY srv
-  FILES
-  save_pcd.srv
-)
-
-generate_messages(
-  DEPENDENCIES
-  sensor_msgs
-  std_msgs
-  geometry_msgs
-)
-
-catkin_package(
-  CATKIN_DEPENDS
-    roscpp
-    std_msgs
-    sensor_msgs
-    geometry_msgs
-    pcl_ros
-  INCLUDE_DIRS
-    include
-  LIBRARIES
-    ${PROJECT_NAME}
-    nano_gicp
-    nanoflann
-)
-
-include_directories(include)
-include_directories(SYSTEM ${catkin_INCLUDE_DIRS})
 
 # Not all machines have <cpuid.h> available
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
-file(WRITE ${CMAKE_BINARY_DIR}/test_cpuid.cpp "#include <cpuid.h>")
+file(WRITE ${CMAKE_BINARY_DIR}/test_cpuid.cpp "#include <cpuid.h>\nint main(){return 0;}")
 try_compile(HAS_CPUID ${CMAKE_BINARY_DIR} ${CMAKE_BINARY_DIR}/test_cpuid.cpp)
 file(REMOVE ${CMAKE_BINARY_DIR}/test_cpuid.cpp)
-if(HAS_CPUID)
-  add_compile_definitions(HAS_CPUID)
-endif()
 
 # NanoFLANN
-add_library(nanoflann STATIC
-  src/nano_gicp/nanoflann.cc
-)
+add_library(nanoflann STATIC src/nano_gicp/nanoflann.cc)
+target_include_directories(nanoflann PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  ${PCL_INCLUDE_DIRS})
 target_link_libraries(nanoflann ${PCL_LIBRARIES})
+set_property(TARGET nanoflann PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 # NanoGICP
 add_library(nano_gicp STATIC
   src/nano_gicp/lsq_registration.cc
-  src/nano_gicp/nano_gicp.cc
-)
-target_link_libraries(nano_gicp ${PCL_LIBRARIES} ${OpenMP_LIBS} nanoflann)
+  src/nano_gicp/nano_gicp.cc)
+target_include_directories(nano_gicp PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  ${PCL_INCLUDE_DIRS})
+target_link_libraries(nano_gicp ${PCL_LIBRARIES} OpenMP::OpenMP_CXX nanoflann)
+set_property(TARGET nano_gicp PROPERTY POSITION_INDEPENDENT_CODE ON)
 
-# Odometry Node
-add_executable(dlio_odom_node src/dlio/odom_node.cc src/dlio/odom.cc)
-add_dependencies(dlio_odom_node ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
-target_compile_options(dlio_odom_node PRIVATE ${OpenMP_FLAGS})
-target_link_libraries(dlio_odom_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenMP_LIBS} Threads::Threads nano_gicp)
+# DLIO library
+add_library(dlio SHARED
+  src/dlio/config.cpp
+  src/dlio/lio.cpp
+  src/dlio/map.cpp
+  src/dlio/io.cpp)
+target_include_directories(dlio PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  ${PCL_INCLUDE_DIRS}
+  ${EIGEN3_INCLUDE_DIR})
+target_link_libraries(dlio PUBLIC
+  ${PCL_LIBRARIES}
+  yaml-cpp
+  OpenMP::OpenMP_CXX
+  Threads::Threads
+  nano_gicp)
+if(HAS_CPUID)
+  target_compile_definitions(dlio PRIVATE HAS_CPUID)
+endif()
 
-# Mapping Node
-add_executable (dlio_map_node src/dlio/map_node.cc src/dlio/map.cc)
-add_dependencies(dlio_map_node ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
-target_compile_options(dlio_map_node PRIVATE ${OpenMP_FLAGS})
-target_link_libraries(dlio_map_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenMP_LIBS} Threads::Threads)
+add_library(dlio::dlio ALIAS dlio)
 
-# Binaries
-install( TARGETS dlio_odom_node dlio_map_node
-         DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION} )
-install( DIRECTORY cfg launch
-         DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION} )
+# Example
+add_executable(dlio_live_mapping examples/live_mapping.cpp)
+target_link_libraries(dlio_live_mapping dlio)
+
+# Smoke test
+enable_testing()
+add_executable(dlio_smoke_test tests/smoke_test.cpp)
+target_link_libraries(dlio_smoke_test dlio)
+add_test(NAME smoke COMMAND dlio_smoke_test)
+
+# Install
+install(TARGETS dlio nano_gicp nanoflann
+  EXPORT dlioTargets
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS dlio_live_mapping RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(DIRECTORY config DESTINATION ${CMAKE_INSTALL_DATADIR}/dlio)
+
+install(EXPORT dlioTargets
+  FILE dlioTargets.cmake
+  NAMESPACE dlio::
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dlio)
+
+configure_package_config_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/dlioConfig.cmake.in
+  ${CMAKE_CURRENT_BINARY_DIR}/dlioConfig.cmake
+  INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dlio)
+write_basic_package_version_file(
+  ${CMAKE_CURRENT_BINARY_DIR}/dlioConfigVersion.cmake
+  VERSION ${PROJECT_VERSION}
+  COMPATIBILITY SameMajorVersion)
+install(FILES
+  ${CMAKE_CURRENT_BINARY_DIR}/dlioConfig.cmake
+  ${CMAKE_CURRENT_BINARY_DIR}/dlioConfigVersion.cmake
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dlio)

@@ -10,38 +10,36 @@
  *                                                         *
  ***********************************************************/
 
-#include "dlio/dlio.h"
+#pragma once
 
-class dlio::MapNode {
+#include "dlio/types.hpp"
 
+#include <pcl/filters/voxel_grid.h>
+
+#include <mutex>
+#include <string>
+
+namespace dlio {
+
+class Map {
 public:
+  explicit Map(double leaf_size = 0.25);
 
-  MapNode(ros::NodeHandle node_handle);
-  ~MapNode();
+  // Accumulate a (world-frame) keyframe cloud into the global map.
+  void addKeyframe(Cloud::ConstPtr kf_cloud);
+  void addKeyframe(const Keyframe& kf) { this->addKeyframe(kf.cloud); }
 
-  void start();
+  Cloud::ConstPtr cloud() const;
+  std::size_t size() const;
+
+  // Voxelize at leaf_size and write to <path> as binary PCD.
+  bool save(const std::string& path, float leaf_size) const;
 
 private:
-
-  void getParams();
-
-  void callbackKeyframe(const sensor_msgs::PointCloud2ConstPtr& keyframe);
-
-  bool savePcd(direct_lidar_inertial_odometry::save_pcd::Request& req,
-               direct_lidar_inertial_odometry::save_pcd::Response& res);
-
-  ros::NodeHandle nh;
-
-  ros::Subscriber keyframe_sub;
-  ros::Publisher map_pub;
-
-  ros::ServiceServer save_pcd_srv;
-
-  pcl::PointCloud<PointType>::Ptr dlio_map;
-  pcl::VoxelGrid<PointType> voxelgrid;
-
-  std::string odom_frame;
-
   double leaf_size_;
-
+  Cloud::Ptr map_;
+  pcl::VoxelGrid<PointType> voxelgrid_;
+  mutable std::mutex mtx_;
 };
+
+} // namespace dlio
