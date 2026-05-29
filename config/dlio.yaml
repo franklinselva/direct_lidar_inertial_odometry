@@ -14,7 +14,12 @@ dlio:
 
   version: 1.1.1
 
+  verbose: true
   adaptive: true
+
+  # ouster | velodyne | hesai | livox | unknown
+  # unknown disables motion deskew (no per-point timestamps)
+  sensor: unknown
 
   pointcloud:
     deskew: true
@@ -43,3 +48,55 @@ dlio:
            0.,  1.,  0.,
            0.,  0.,  1. ]
 
+  map:
+    waitUntilMove: true
+    dense:
+      filtered: false
+    sparse:
+      leafSize: 0.25
+
+  odom:
+
+    gravity: 9.80665
+    computeTimeOffset: true
+
+    imu:
+      approximateGravity: true
+      calibration:
+        gyro: true
+        accel: true
+        time: 3
+      bufferSize: 5000
+
+    preprocessing:
+      cropBoxFilter:
+        size: 1.0
+      voxelFilter:
+        res: 0.25
+
+    keyframe:
+      threshD: 1.0
+      threshR: 45.0
+
+    submap:
+      keyframe:
+        knn: 10
+        kcv: 10
+        kcc: 10
+    gicp:
+      minNumPoints: 64
+      kCorrespondences: 16
+      maxCorrespondenceDistance: 0.5
+      maxIterations: 32
+      transformationEpsilon: 0.01
+      rotationEpsilon: 0.01
+      initLambdaFactor: 1e-9
+
+    geo:
+      Kp: 4.5
+      Kv: 11.25
+      Kq: 4.0
+      Kab: 2.25
+      Kgb: 1.0
+      abias_max: 5.0
+      gbias_max: 0.5

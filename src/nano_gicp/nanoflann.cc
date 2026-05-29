@@ -42,7 +42,7 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *************************************************************************/
 
-#include "dlio/dlio.h"
+#include "dlio/point.hpp"
 #include "nano_gicp/nanoflann_adaptor.h"
 
 template class nanoflann::KdTreeFLANN<PointType>;

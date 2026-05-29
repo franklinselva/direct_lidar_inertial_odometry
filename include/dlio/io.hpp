@@ -10,21 +10,21 @@
  *                                                         *
  ***********************************************************/
 
-#include "dlio/map.h"
+#pragma once
 
-int main(int argc, char** argv) {
+#include "dlio/types.hpp"
 
-  mallopt(M_ARENA_MAX, 1);
+#include <string>
+#include <vector>
 
-  ros::init(argc, argv, "dlio_map_node");
-  ros::NodeHandle nh("~");
+namespace dlio::io {
 
-  dlio::MapNode node(nh);
-  ros::AsyncSpinner spinner(0);
-  spinner.start();
-  node.start();
-  ros::waitForShutdown();
+// TUM format: timestamp tx ty tz qx qy qz qw (one row per pose).
+bool write_tum_trajectory(const std::string& path,
+                          const std::vector<Pose>& poses,
+                          const std::vector<double>& stamps);
 
-  return 0;
+// Writes <dir>/keyframe_poses.txt (TUM) and <dir>/keyframe_<i>.pcd per keyframe.
+bool write_keyframes(const std::string& dir, const std::vector<Keyframe>& keyframes);
 
-}
+} // namespace dlio::io
