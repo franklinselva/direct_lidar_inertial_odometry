@@ -18,6 +18,7 @@
 // Scan files:    <pcd_dir>/<stamp>.pcd  (filename stem parsed as the timestamp)
 
 #include "dlio/config.hpp"
+#include "dlio/dense_map.hpp"
 #include "dlio/io.hpp"
 #include "dlio/lio.hpp"
 #include "dlio/map.hpp"
@@ -101,27 +102,17 @@ int main(int argc, char** argv) {
 
   lio.onKeyframe = [&](const Keyframe& kf) { map.addKeyframe(kf.cloud); };
 
-  // Dense map: accumulate every deskewed scan (already in world frame via the
-  // GICP correction) so the full LiDAR data is overlaid into one cloud. This is
-  // what reveals seamlessness (sharp = good, ghosted = bad); the keyframe map
-  // above is sparse, especially when the platform spins in place.
-  auto dense = std::make_shared<Cloud>();
-  pcl::VoxelGrid<PointType> dense_vg;
-  const float dense_leaf = 0.10f;
-  dense_vg.setLeafSize(dense_leaf, dense_leaf, dense_leaf);
-  int dense_adds = 0;
-  lio.onDeskewedCloud = [&](Cloud::ConstPtr c, const State&, double) {
-    // voxel this scan first (cheap, bounded), then append; global voxel only
-    // periodically so we never re-filter a huge cloud every frame.
-    Cloud::Ptr ds = std::make_shared<Cloud>(*c);
-    dense_vg.setInputCloud(ds);
-    dense_vg.filter(*ds);
-    *dense += *ds;
-    if (++dense_adds % 100 == 0) {
-      dense_vg.setInputCloud(dense);
-      dense_vg.filter(*dense);
-    }
+  // Dense map: fold every deskewed scan (already in world frame via the GICP
+  // correction) into a DenseMap, which overlays the full LiDAR data into one
+  // cloud AND rejects dynamic obstacles at save time (per-voxel scan count +
+  // free-space ray carving from the sensor origin). The keyframe map above is
+  // sparse, especially when the platform spins in place.
+  DenseMap dense(/*leaf*/ 0.10f, /*carve_margin*/ 0.30f, /*ground_z*/ 0.25f);
+  lio.onDeskewedCloud = [&](Cloud::ConstPtr c, const State& s, double stamp) {
+    dense.add(c, stamp, s.p);  // s.p = sensor world position => ray origin
   };
+  const int   dense_min_scans = 2;     // drop fast movers (seen in < 2 scans)
+  const float dense_max_free  = 0.5f;  // drop dwelling movers (carved-through > 50%)
 
   std::vector<ImuSample> imu = loadImu(imu_csv);
   std::vector<ScanFile> scans = listScans(pcd_dir);
@@ -153,12 +144,9 @@ int main(int argc, char** argv) {
   const std::string traj_txt = out_dir + "/trajectory.txt";
   const std::string kf_dir = out_dir + "/keyframes";
 
-  // final global voxel of the dense map
-  if (!dense->empty()) {
-    dense_vg.setInputCloud(dense);
-    dense_vg.filter(*dense);
-  }
-  bool ok_dense = !dense->empty() && pcl::io::savePCDFileBinary(dense_pcd, *dense) == 0;
+  // Dense map: persistence-filtered (dynamics removed) save.
+  std::string dense_msg;
+  bool ok_dense = dense.save(dense_pcd, dense_min_scans, dense_max_free, dense_msg);
 
   bool ok_map = map.save(map_pcd, cfg.map.sparseLeafSize);
   bool ok_traj = io::write_tum_trajectory(traj_txt, lio.getTrajectory(), lio.getTrajectoryStamps());
@@ -166,7 +154,7 @@ int main(int argc, char** argv) {
 
   std::cout << "\nkeyframe map -> " << map_pcd   << (ok_map   ? " [ok]" : " [FAILED]") << std::endl;
   std::cout << "dense map    -> " << dense_pcd  << (ok_dense ? " [ok]" : " [FAILED]")
-            << " (" << dense->size() << " pts)" << std::endl;
+            << " (" << dense_msg << ")" << std::endl;
   std::cout << "trajectory   -> " << traj_txt   << (ok_traj  ? " [ok]" : " [FAILED]") << std::endl;
   std::cout << "keyframes    -> " << kf_dir     << (ok_kf    ? " [ok]" : " [FAILED]") << std::endl;
 
