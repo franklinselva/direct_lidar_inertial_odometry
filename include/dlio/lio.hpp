@@ -60,6 +60,10 @@ public:
 
   // Accessors
   State getState() const;
+  // Latest GICP information matrix, [rot(3), trans(3)] in world tangent. Small
+  // eigenvalues mark degenerate (under-constrained) DOF — e.g. open space.
+  Eigen::Matrix<double, 6, 6> getRegistrationHessian() const;
+  bool registrationConverged() const { return this->gicp_hasConverged.load(); }
   Pose getLidarPose() const;
   std::vector<Pose> getTrajectory() const;
   std::vector<double> getTrajectoryStamps() const;
@@ -207,6 +211,7 @@ private:
   // GICP
   nano_gicp::NanoGICP<PointType, PointType> gicp;
   nano_gicp::NanoGICP<PointType, PointType> gicp_temp;
+  Eigen::Matrix<double, 6, 6> last_hessian_ = Eigen::Matrix<double, 6, 6>::Identity();
 
   // Transformations
   Eigen::Matrix4f T, T_prior, T_corr;

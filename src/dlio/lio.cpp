@@ -607,9 +607,15 @@ bool LIO::addScan(Cloud::ConstPtr scan, double stamp) {
   if (this->keyframes.size() == 0) {
     this->initializeInputTarget();
     this->main_loop_running = false;
+#ifdef DLIO_OFFLINE_DETERMINISTIC
+    this->submap_future =
+      std::async( std::launch::deferred, &LIO::buildKeyframesAndSubmap, this, this->state );
+    this->submap_future.wait();
+#else
     this->submap_future =
       std::async( std::launch::async, &LIO::buildKeyframesAndSubmap, this, this->state );
     this->submap_future.wait(); // wait until completion
+#endif
     return true;
   }
 
@@ -622,8 +628,14 @@ bool LIO::addScan(Cloud::ConstPtr scan, double stamp) {
   // Build keyframe normals and submap if needed (and if we're not already waiting)
   if (this->new_submap_is_ready) {
     this->main_loop_running = false;
+#ifdef DLIO_OFFLINE_DETERMINISTIC
+    this->submap_future =
+      std::async( std::launch::deferred, &LIO::buildKeyframesAndSubmap, this, this->state );
+    this->submap_future.wait();
+#else
     this->submap_future =
       std::async( std::launch::async, &LIO::buildKeyframesAndSubmap, this, this->state );
+#endif
   } else {
     lock.lock();
     this->main_loop_running = false;
@@ -1117,6 +1129,8 @@ void LIO::updateState() {
   // Lock thread to prevent state from being accessed by PropagateState
   std::lock_guard<std::mutex> lock( this->geo.mtx );
 
+  this->last_hessian_ = this->gicp.getFinalHessian();
+
   Eigen::Vector3f pin = this->lidarPose.p;
   Eigen::Quaternionf qin = this->lidarPose.q;
   double dt = this->scan_stamp - this->prev_scan_stamp;
@@ -1597,6 +1611,11 @@ void LIO::pauseSubmapBuildIfNeeded() {
 State LIO::getState() const {
   std::lock_guard<std::mutex> lock(this->geo.mtx);
   return this->state;
+}
+
+Eigen::Matrix<double, 6, 6> LIO::getRegistrationHessian() const {
+  std::lock_guard<std::mutex> lock(this->geo.mtx);
+  return this->last_hessian_;
 }
 
 Pose LIO::getLidarPose() const {
