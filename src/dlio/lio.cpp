@@ -579,6 +579,14 @@ bool LIO::addScan(Cloud::ConstPtr scan, double stamp) {
   // Convert incoming scan into DLIO format
   this->getScan(scan, stamp);
 
+  // An empty scan (all points NaN or inside the crop box) would crash
+  // deskewPointcloud: extract_point_time dereferences the begin iterator of
+  // the unique-timestamp range, which is a null point ref on an empty cloud.
+  if (this->original_scan->points.empty()) {
+    std::cerr << "dlio: empty scan after filtering — skipping!" << std::endl;
+    return false;
+  }
+
   // Preprocess points
   this->preprocessPoints();
 
