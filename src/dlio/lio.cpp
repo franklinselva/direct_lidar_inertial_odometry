@@ -501,7 +501,23 @@ void LIO::deskewPointcloud() {
   // if there are no frames between the start and end of the sweep
   // that probably means that there's a sync issue
   if (frames.size() != timestamps.size()) {
-    std::cerr << "dlio: bad time sync between LiDAR and IMU!" << std::endl;
+    // No IMU samples bracket this scan's sweep window — the IMU buffer doesn't
+    // overlap the LiDAR stamps (clock-domain skew, stale/absent IMU, or LiDAR
+    // not arriving). Throttle: this fires once per rejected scan and floods the
+    // log otherwise. Report the suppressed count so the rate stays visible.
+    static auto last_warn = std::chrono::steady_clock::now() - std::chrono::hours(1);
+    static unsigned long suppressed = 0;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_warn >= std::chrono::seconds(2)) {
+      std::cerr << "dlio: LiDAR/IMU time sync — no IMU samples bracket this scan "
+                   "(check IMU rate & stamp domain vs LiDAR)";
+      if (suppressed) std::cerr << " [" << suppressed << " more suppressed]";
+      std::cerr << std::endl;
+      last_warn = now;
+      suppressed = 0;
+    } else {
+      ++suppressed;
+    }
 
     this->T_prior = this->T;
     pcl::transformPointCloud (*deskewed_scan_, *deskewed_scan_, this->T_prior * this->extrinsics.baselink2lidar_T);
