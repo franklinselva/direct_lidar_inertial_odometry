@@ -195,6 +195,9 @@ private:
   std::condition_variable submap_build_cv;
   bool main_loop_running;
   std::mutex main_loop_running_mutex;
+  // Set in the destructor to break every blocking wait (IMU-bracket, submap
+  // pause) so shutdown can't deadlock the scan thread → node → SIGKILL.
+  std::atomic<bool> abort_{false};
 
   // Timestamps
   double scan_header_stamp;

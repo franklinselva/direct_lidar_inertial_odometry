@@ -246,8 +246,27 @@ LIO::LIO(const Config& cfg) : cfg_(cfg) {
 }
 
 LIO::~LIO() {
+  // Break every blocking wait before draining, so teardown can't deadlock:
+  //   - the scan thread parked in imuMeasFromTimeRange (IMU-bracket wait)
+  //   - the async submap build parked in pauseSubmapBuildIfNeeded
+  this->abort_.store(true, std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> lk(this->main_loop_running_mutex);
+    this->main_loop_running = false;
+  }
+  this->submap_build_cv.notify_all();
+  this->cv_imu_stamp.notify_all();
+
+  // Now the in-flight build exits promptly; wait it out, then join the one-shot
+  // metric/debug threads so they can't touch a half-destroyed `this`.
   if (this->submap_future.valid()) {
     this->submap_future.wait();
+  }
+  if (this->metrics_thread.joinable()) {
+    this->metrics_thread.join();
+  }
+  if (this->debug_thread.joinable()) {
+    this->debug_thread.join();
   }
 }
 
@@ -615,9 +634,10 @@ bool LIO::addScan(Cloud::ConstPtr scan, double stamp) {
     return false;
   }
 
-  // Compute Metrics
+  // Compute Metrics (one-shot per scan). Joined before re-spawn / in the dtor
+  // instead of detached, so it can never touch a destroyed `this` on shutdown.
+  if (this->metrics_thread.joinable()) this->metrics_thread.join();
   this->metrics_thread = std::thread( &LIO::computeMetrics, this );
-  this->metrics_thread.detach();
 
   // Set Adaptive Parameters
   if (this->adaptive_params_) {
@@ -709,8 +729,8 @@ bool LIO::addScan(Cloud::ConstPtr scan, double stamp) {
 
   // Debug statements
   if (this->verbose) {
+    if (this->debug_thread.joinable()) this->debug_thread.join();
     this->debug_thread = std::thread( &LIO::debug, this );
-    this->debug_thread.detach();
   }
 
   this->geo.first_opt_done = true;
@@ -891,9 +911,22 @@ bool LIO::imuMeasFromTimeRange(double start_time, double end_time,
                                boost::circular_buffer<ImuMeas>::reverse_iterator& end_imu_it) {
 
   if (this->imu_buffer.empty() || this->imu_buffer.front().stamp < end_time) {
-    // Wait for the latest IMU data
+    // Wait for the latest IMU data — BOUNDED. An unbounded wait here hung the
+    // whole node on SIGINT: when the IMU stops (shutdown) or its stamps never
+    // reach end_time (bad time sync), the scan thread blocked forever, the
+    // executor never returned from spin(), and launch escalated to SIGKILL.
+    // Time out and bail (skip this scan) instead; abort_ breaks it immediately.
     std::unique_lock<decltype(this->mtx_imu)> lock(this->mtx_imu);
-    this->cv_imu_stamp.wait(lock, [this, &end_time]{ return this->imu_buffer.front().stamp >= end_time; });
+    this->cv_imu_stamp.wait_for(
+        lock, std::chrono::milliseconds(100), [this, &end_time] {
+          return this->abort_.load(std::memory_order_relaxed) ||
+                 (!this->imu_buffer.empty() &&
+                  this->imu_buffer.front().stamp >= end_time);
+        });
+    if (this->abort_.load(std::memory_order_relaxed) ||
+        this->imu_buffer.empty() || this->imu_buffer.front().stamp < end_time) {
+      return false;  // not enough IMU (or shutting down) — caller skips the scan
+    }
   }
 
   auto imu_it = this->imu_buffer.begin();
@@ -1629,7 +1662,9 @@ void LIO::buildKeyframesAndSubmap(State vehicle_state) {
 
 void LIO::pauseSubmapBuildIfNeeded() {
   std::unique_lock<decltype(this->main_loop_running_mutex)> lock(this->main_loop_running_mutex);
-  this->submap_build_cv.wait(lock, [this]{ return !this->main_loop_running; });
+  this->submap_build_cv.wait(lock, [this]{
+    return this->abort_.load(std::memory_order_relaxed) || !this->main_loop_running;
+  });
 }
 
 State LIO::getState() const {
